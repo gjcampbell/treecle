@@ -34,7 +34,7 @@ test('has the right bigger structure', () => {
     tree.add(1, 2, 3, 4, 5, 6, 7);
 
     expect(tree.getSize()).toBe(7);
-    expect(stringifyBtree(tree)).toBe('4(2(1(-,-),3(-,-)),6(5(-,-),7(-,-)))');
+    expect(stringifyBtree(tree)).toBe('4(2(1,3),6(5,7))');
 });
 
 test('looks good after a remove', () => {
@@ -43,7 +43,7 @@ test('looks good after a remove', () => {
     tree.remove(1);
 
     expect(tree.getSize()).toBe(6);
-    expect(stringifyBtree(tree)).toBe('4(2(-,3(-,-)),6(5(-,-),7(-,-)))');
+    expect(stringifyBtree(tree)).toBe('4(2(-,3),6(5,7))');
 });
 
 test('looks good after a couple removes', () => {
@@ -52,19 +52,19 @@ test('looks good after a couple removes', () => {
 
     tree.remove(1, 2);
     expect(tree.getSize()).toBe(5);
-    expect(stringifyBtree(tree)).toBe('4(3(-,-),6(5(-,-),7(-,-)))');
+    expect(stringifyBtree(tree)).toBe('4(3,6(5,7))');
 
     tree.remove(3, 5);
     expect(tree.getSize()).toBe(3);
-    expect(stringifyBtree(tree)).toBe('6(4(-,-),7(-,-))');
+    expect(stringifyBtree(tree)).toBe('6(4,7)');
 
     tree.remove(7);
     expect(tree.getSize()).toBe(2);
-    expect(stringifyBtree(tree)).toBe('6(4(-,-),-)');
+    expect(stringifyBtree(tree)).toBe('6(4,-)');
 
     tree.remove(6);
     expect(tree.getSize()).toBe(1);
-    expect(stringifyBtree(tree)).toBe('4(-,-)');
+    expect(stringifyBtree(tree)).toBe('4');
 
     tree.remove(4);
     expect(tree.getSize()).toBe(0);
@@ -90,7 +90,7 @@ test('can add multiple same key non-primitives', () => {
 
     expect(tree.getSize()).toBe(2);
 
-    expect(stringifyBtree(tree)).toBe('{"v":1}(-,-)');
+    expect(stringifyBtree(tree)).toBe('{"v":1}');
 });
 
 test('can remove non-primitives by reference', () => {
@@ -135,4 +135,25 @@ test('can iterate items in order', () => {
 
     tree.remove(6, 4);
     expect([...tree.getItems()].join(',')).toBe('3,5,7');
+
+    tree.add(4, 6, 1, 2);
+    expect([...tree.getItems()].join(',')).toBe('1,2,3,4,5,6,7');
+});
+
+test('has a reasonably log2(n) depth', () => {
+    const tree = createTree(),
+        count = 10000;
+    for (let i = 0; i < count; i++) {
+        const item = Math.round(Math.random() * 100000);
+        tree.add(item);
+    }
+
+    const getMaxDepth = (node: any, depth = 0): number => {
+        const left = node ? getMaxDepth(node.left, depth + 1) : 0,
+            right = node ? getMaxDepth(node.right, depth + 1) : 0;
+
+        return Math.max(depth, left, right);
+    };
+    const maxDepth = getMaxDepth(tree.getRoot());
+    expect(Math.abs(maxDepth - Math.log2(count))).toBeLessThanOrEqual(3);
 });

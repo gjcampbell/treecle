@@ -26,28 +26,29 @@ export class BTree<T> {
     }
 
     public find(item: T) {
-        let curr = this.root,
-            comparer = this.comparer,
-            value = 0;
-
-        return (function*() {
-            while (curr) {
-                value = comparer(curr.getOne(), item);
-                if (value < 0) {
-                    curr = curr.right;
-                } else if (value > 0) {
-                    curr = curr.left;
-                } else {
-                    for (let item of curr.getItems()) {
-                        yield item;
-                    }
-                    break;
-                }
-            }
-        })();
+        return BTree.find<T>(this, item);
     }
 
     //#region Iterate
+    private static find = function*<T>(tree: BTree<T>, item: T) {
+        const comparer = tree.comparer;
+        let curr = tree.root,
+            value = 0;
+        while (curr) {
+            value = comparer(curr.getOne(), item);
+            if (value < 0) {
+                curr = curr.right;
+            } else if (value > 0) {
+                curr = curr.left;
+            } else {
+                for (let item of curr.getItems()) {
+                    yield item;
+                }
+                break;
+            }
+        }
+    };
+
     private static iterateItems = function*<T>(root?: BTNode<T>) {
         for (let node of BTree.iterateNodes(root)) {
             for (let item of node.getItems()) {
@@ -152,7 +153,9 @@ export class BTree<T> {
 
         while (curr) {
             balance = curr.balance += balance;
-            if (balance === 2) {
+            if (balance === 0) {
+                break;
+            } else if (balance === 2) {
                 if (curr.left!.balance === 1) {
                     this.rotateRight(curr);
                 } else {
@@ -165,8 +168,6 @@ export class BTree<T> {
                 } else {
                     this.rotateRightLeft(curr);
                 }
-                break;
-            } else if (balance === 0) {
                 break;
             }
 
@@ -372,7 +373,7 @@ export class BTree<T> {
             leftsRight = left.right!,
             parent = node.parent,
             leftsRightRight = leftsRight.right,
-            leftsRightLeft = leftsRight.right;
+            leftsRightLeft = leftsRight.left;
 
         leftsRight.setAsChild(parent, node);
         node.setLeft(leftsRightRight);
@@ -440,8 +441,9 @@ export const stringifyBtree = <T>(tree: BTree<T>) => {
             return '-';
         } else {
             let item = node.getOne(),
+                children = node.left || node.right ? `(${printNode(node.left)},${printNode(node.right)})` : '',
                 toString = typeof item === 'object' ? JSON.stringify(item) : item;
-            return `${toString}(${printNode(node.left)},${printNode(node.right)})`;
+            return `${toString}${children}`;
         }
     };
     return printNode(tree.getRoot());
