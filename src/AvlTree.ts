@@ -1,5 +1,3 @@
-import { jsxOpeningElement } from '@babel/types';
-
 enum SortRelationship {
     Greater = 1,
     Less = -1,
@@ -11,11 +9,18 @@ enum Direction {
     none = -1
 }
 
-export class BTree<T> {
-    private root?: BTNode<T>;
+export class BTree<K, V> {
+    private root?: BTNode<V>;
     private size = 0;
 
-    constructor(private comparer: (pivot: T, other: T) => number | SortRelationship) {}
+    constructor(
+        private comparer: (pivot: K, other: K) => number | SortRelationship,
+        private keyAccessor?: (item: V) => K
+    ) {
+        if (!keyAccessor) {
+            this.keyAccessor = v => (v as unknown) as K;
+        }
+    }
 
     public getSize() {
         return this.size;
@@ -25,17 +30,53 @@ export class BTree<T> {
         return this.root;
     }
 
-    public find(item: T) {
-        return BTree.find<T>(this, item);
+    public find(key: K) {
+        return BTree.find<K, V>(this, key);
     }
 
+    public static ofType<K extends number | Date, V>(keyAccessor: (value: V) => K): BTree<K, V> {
+        return new BTree(BTree.primitiveComparer<K>(), keyAccessor);
+    }
+    public static ofTypeString<K extends string, V>(
+        keyAccessor: (value: V) => K,
+        option: Intl.CollatorOptions = { sensitivity: 'base' },
+        locales?: string[] | undefined
+    ): BTree<K, V> {
+        return new BTree(BTree.stringComparer(option, locales), keyAccessor);
+    }
+    public static ofNumber() {
+        return new BTree<number, number>(BTree.primitiveComparer<number>());
+    }
+    public static ofDate() {
+        return new BTree<Date, Date>(BTree.primitiveComparer<Date>());
+    }
+    public static ofString(option: Intl.CollatorOptions = { sensitivity: 'base' }, locales?: string[] | undefined) {
+        return new BTree<string, string>(BTree.stringComparer(option, locales));
+    }
+
+    //#region Comparers
+    private static stringComparer(
+        option: Intl.CollatorOptions = { sensitivity: 'base' },
+        locales?: string[] | undefined
+    ) {
+        return (a: string, b: string) => {
+            return a.localeCompare(b, locales, option);
+        };
+    }
+    private static primitiveComparer<T extends number | Date>() {
+        return (a: T, b: T) => {
+            return a > b ? 1 : a < b ? -1 : 0;
+        };
+    }
+    //#endregion
+
     //#region Iterate
-    private static find = function*<T>(tree: BTree<T>, item: T) {
+    private static find = function*<K, V>(tree: BTree<K, V>, item: K) {
         const comparer = tree.comparer;
         let curr = tree.root,
             value = 0;
         while (curr) {
-            value = comparer(curr.getOne(), item);
+            value = comparer(tree.keyAccessor!(curr.getOne()), item);
             if (value < 0) {
                 curr = curr.right;
             } else if (value > 0) {
@@ -49,18 +90,18 @@ export class BTree<T> {
         }
     };
 
-    private static iterateItems = function*<T>(root?: BTNode<T>) {
+    private static iterateItems = function*<V>(root?: BTNode<V>) {
         for (let node of BTree.iterateNodes(root)) {
             for (let item of node.getItems()) {
                 yield item;
             }
         }
     };
-    private static iterateNodes = function*<T>(root?: BTNode<T>) {
+    private static iterateNodes = function*<V>(root?: BTNode<V>) {
         let nextDir = Direction.right,
             curr = root!,
-            right: BTNode<T> | undefined = curr,
-            prev: BTNode<T>;
+            right: BTNode<V> | undefined = curr,
+            prev: BTNode<V>;
         while (curr) {
             if (nextDir === Direction.right) {
                 curr = right!;
@@ -97,9 +138,9 @@ export class BTree<T> {
     //#endregion
 
     //#region Add
-    public add(...items: T[]) {
+    public add(...items: V[]) {
         for (let item of items) {
-            let newNode = new BTNode<T>(item);
+            let newNode = new BTNode<V>(item);
             if (!this.root) {
                 this.root = newNode;
                 this.size = 1;
@@ -109,14 +150,14 @@ export class BTree<T> {
         }
     }
 
-    private addItem(newNode: BTNode<T>) {
+    private addItem(newNode: BTNode<V>) {
         let comparer = this.comparer,
-            curr: BTNode<T> | undefined = this.root!,
+            curr: BTNode<V> | undefined = this.root!,
             value = 0,
             rebalanceDir = 0;
 
         while (curr) {
-            value = comparer(curr.getOne(), newNode.getOne());
+            value = comparer(this.keyAccessor!(curr.getOne()), this.keyAccessor!(newNode.getOne()));
             if (value > 0) {
                 if (curr.left) {
                     curr = curr.left;
@@ -146,10 +187,10 @@ export class BTree<T> {
         }
     }
 
-    private balanceInsertion(node: BTNode<T>, direction: number) {
+    private balanceInsertion(node: BTNode<V>, direction: number) {
         let balance = direction,
-            parent: undefined | BTNode<T>,
-            curr: undefined | BTNode<T> = node;
+            parent: undefined | BTNode<V>,
+            curr: undefined | BTNode<V> = node;
 
         while (curr) {
             balance = curr.balance += balance;
@@ -181,20 +222,20 @@ export class BTree<T> {
     //#endregion
 
     //#region Remove
-    public remove(...items: T[]) {
+    public remove(...items: V[]) {
         for (let item of items) {
             this.removeItem(item);
         }
     }
 
-    private removeItem(item: T) {
+    private removeItem(item: V) {
         let node = this.root,
             comparer = this.comparer,
             value: number,
             result = false;
 
         while (node) {
-            value = comparer(node.getOne(), item);
+            value = comparer(this.keyAccessor!(node.getOne()), this.keyAccessor!(item));
             if (value < 0) {
                 node = node.right;
             } else if (value > 0) {
@@ -295,10 +336,10 @@ export class BTree<T> {
         return result;
     }
 
-    private balanceDeletion(node: BTNode<T>, direction: number) {
-        let curr: undefined | BTNode<T> = node,
+    private balanceDeletion(node: BTNode<V>, direction: number) {
+        let curr: undefined | BTNode<V> = node,
             balance = direction,
-            parent: undefined | BTNode<T>;
+            parent: undefined | BTNode<V>;
         while (curr) {
             balance = curr.balance += balance;
 
@@ -334,7 +375,7 @@ export class BTree<T> {
     //#endregion
 
     //#region Rotate
-    private rotateLeft(node: BTNode<T>) {
+    private rotateLeft(node: BTNode<V>) {
         const right = node.right!,
             rightsLeft = right.left,
             parent = node.parent;
@@ -351,7 +392,7 @@ export class BTree<T> {
 
         return right;
     }
-    private rotateRight(node: BTNode<T>) {
+    private rotateRight(node: BTNode<V>) {
         const left = node.left!,
             leftsRight = left.right,
             parent = node.parent;
@@ -368,7 +409,7 @@ export class BTree<T> {
 
         return left;
     }
-    private rotateLeftRight(node: BTNode<T>) {
+    private rotateLeftRight(node: BTNode<V>) {
         const left = node.left!,
             leftsRight = left.right!,
             parent = node.parent,
@@ -400,7 +441,7 @@ export class BTree<T> {
 
         return leftsRight;
     }
-    private rotateRightLeft(node: BTNode<T>) {
+    private rotateRightLeft(node: BTNode<V>) {
         let right = node.right!,
             rightsLeft = right.left!,
             parent = node.parent,
@@ -435,8 +476,8 @@ export class BTree<T> {
     //#endregion
 }
 
-export const stringifyBtree = <T>(tree: BTree<T>) => {
-    const printNode = (node?: BTNode<T>): string => {
+export const stringifyBtree = <K, V>(tree: BTree<K, V>) => {
+    const printNode = (node?: BTNode<V>): string => {
         if (!node) {
             return '-';
         } else {
@@ -455,33 +496,33 @@ enum RemovalResult {
     Removed = 2
 }
 
-class BTNode<T> {
-    public left?: BTNode<T>;
-    public right?: BTNode<T>;
+class BTNode<V> {
+    public left?: BTNode<V>;
+    public right?: BTNode<V>;
     public balance = 0;
-    public parent?: BTNode<T>;
+    public parent?: BTNode<V>;
 
-    private items: Set<T> = new Set<T>();
-    private anItem: T;
-    private static iterator = function*<T>(items: Set<T>) {
+    private items: Set<V> = new Set<V>();
+    private anItem: V;
+    private static iterator = function*<V>(items: Set<V>) {
         for (let item of items.values()) {
             yield item;
         }
     };
 
-    constructor(item: T) {
+    constructor(item: V) {
         this.anItem = item;
         this.items.add(item);
     }
 
-    public addItem(item: T) {
+    public addItem(item: V) {
         if (!this.items.has(item)) {
             this.items.add(item);
             return true;
         }
         return false;
     }
-    public removeItem(item: T) {
+    public removeItem(item: V) {
         let isEmpty = false,
             removed = this.items.delete(item);
 
@@ -496,24 +537,24 @@ class BTNode<T> {
 
         return isEmpty ? RemovalResult.Empty : removed ? RemovalResult.Removed : RemovalResult.NotRemoved;
     }
-    public hasItem(item: T) {
+    public hasItem(item: V) {
         return this.items.has(item);
     }
     public getItems() {
-        return BTNode.iterator<T>(this.items);
+        return BTNode.iterator<V>(this.items);
     }
     public getOne() {
         return this.anItem;
     }
-    public setLeft(left?: BTNode<T>) {
+    public setLeft(left?: BTNode<V>) {
         this.left = left;
         this.setChild(left);
     }
-    public setRight(right?: BTNode<T>) {
+    public setRight(right?: BTNode<V>) {
         this.right = right;
         this.setChild(right);
     }
-    public setAsChild(parent: BTNode<T> | undefined, previousChild: BTNode<T>) {
+    public setAsChild(parent: BTNode<V> | undefined, previousChild: BTNode<V>) {
         if (parent) {
             if (parent.right === previousChild) {
                 parent.right = this;
@@ -523,7 +564,7 @@ class BTNode<T> {
         }
         this.parent = parent;
     }
-    private setChild(child?: BTNode<T>) {
+    private setChild(child?: BTNode<V>) {
         if (child) {
             child.parent = this;
         }
