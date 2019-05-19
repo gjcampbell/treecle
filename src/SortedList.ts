@@ -6,53 +6,168 @@ enum SortRelationship {
 enum Direction {
     right = 1,
     up = 0,
+    left = 2,
     none = -1
 }
 
-export class BTree<K, V> {
-    private root?: BTNode<V>;
+interface IConstructorOptions {
+    dedupe: 'byref' | 'bykey' | 'disabled';
+    disableIterableCache?: boolean;
+}
+
+export class SortedList<K, V> {
+    private root?: BTNode<K, V>;
     private size = 0;
+    private keyAccessor: (item: V) => K;
+    private nodeStorageType: new (item: V) => INodeStorage<V>;
+    private iteratorCache?: V[] = undefined;
+    private cacheDisabled = false;
 
     constructor(
         private comparer: (pivot: K, other: K) => number | SortRelationship,
-        private keyAccessor?: (item: V) => K
+        keyAccessor?: (item: V) => K,
+        options?: IConstructorOptions
     ) {
-        if (!keyAccessor) {
-            this.keyAccessor = v => (v as unknown) as K;
-        }
+        this.keyAccessor = keyAccessor || (v => (v as unknown) as K);
+        this.nodeStorageType = !options
+            ? NodeArrayStorage
+            : options.dedupe === 'disabled'
+            ? NodeArrayStorage
+            : options.dedupe === 'bykey'
+            ? NodeSingleItemStorage
+            : options.dedupe === 'byref'
+            ? NodeSetStorage
+            : NodeArrayStorage;
+
+        this.cacheDisabled = options ? !!options.disableIterableCache : false;
     }
 
+    /**
+     * O(1), Get number of items in the list, including those with a duplicate key
+     */
     public getSize() {
         return this.size;
     }
 
+    /**
+     * O(1), Get root of AVL tree
+     */
     public getRoot() {
         return this.root;
     }
 
+    /**
+     * O(log n), Find items by key
+     * @param key
+     */
     public find(key: K) {
-        return BTree.find<K, V>(this, key);
+        return SortedList.find<K, V>(this, key);
     }
 
-    public static ofType<K extends number | Date, V>(keyAccessor: (value: V) => K): BTree<K, V> {
-        return new BTree(BTree.primitiveComparer<K>(), keyAccessor);
+    /**
+     * O(log n), Find a single item by key
+     * @param key
+     */
+    public findOne(key: K) {
+        for (let item of this.find(key)) {
+            return item;
+        }
     }
+
+    /**
+     * O(args log n), Add one or more items
+     * @param items
+     */
+    public add(...items: V[]) {
+        let result = false;
+
+        for (let item of items) {
+            let key = this.keyAccessor(item);
+            if (!this.root) {
+                this.root = new BTNode<K, V>(item, key, new this.nodeStorageType(item));
+                this.size = 1;
+                result = true;
+            } else {
+                if (this.addItem(key, item)) {
+                    result = true;
+                }
+            }
+        }
+
+        if (result) {
+            this.iteratorCache = undefined;
+        }
+
+        return result;
+    }
+
+    /**
+     * O(args log n), Remove items, return true if anything was removed
+     * @param items
+     */
+    public remove(...items: V[]) {
+        let result = false;
+
+        for (let item of items) {
+            if (this.removeItem(item)) {
+                result = true;
+            }
+        }
+
+        if (result) {
+            this.iteratorCache = undefined;
+        }
+
+        return result;
+    }
+
+    /**
+     * O(n log n) 1st time, then cached O(n), if cache not disabled
+     * Get iterator for list
+     * @param desc true to get items in reverse order
+     */
+    public getItems(desc?: boolean) {
+        if (!this.cacheDisabled) {
+            if (!this.iteratorCache) {
+                this.iteratorCache = [...SortedList.iterateItems(this.root)];
+            }
+            return SortedList.iterateArray<V>(this.iteratorCache, desc);
+        } else {
+            return desc ? SortedList.iterateItemsDesc(this.root) : SortedList.iterateItems(this.root);
+        }
+    }
+
+    //#region
+    public static ofType<K extends number | Date, V>(
+        keyAccessor: (value: V) => K,
+        options?: IConstructorOptions
+    ): SortedList<K, V> {
+        return new SortedList(SortedList.primitiveComparer<K>(), keyAccessor, options);
+    }
+
     public static ofTypeString<K extends string, V>(
         keyAccessor: (value: V) => K,
-        option: Intl.CollatorOptions = { sensitivity: 'base' },
+        options: Intl.CollatorOptions & IConstructorOptions = { sensitivity: 'base', dedupe: 'byref' },
         locales?: string[] | undefined
-    ): BTree<K, V> {
-        return new BTree(BTree.stringComparer(option, locales), keyAccessor);
+    ): SortedList<K, V> {
+        return new SortedList(SortedList.stringComparer(options, locales), keyAccessor, options);
     }
+
     public static ofNumber() {
-        return new BTree<number, number>(BTree.primitiveComparer<number>());
+        return new SortedList<number, number>(SortedList.primitiveComparer<number>(), undefined, { dedupe: 'bykey' });
     }
+
     public static ofDate() {
-        return new BTree<Date, Date>(BTree.primitiveComparer<Date>());
+        return new SortedList<Date, Date>(SortedList.primitiveComparer<Date>(), undefined, { dedupe: 'bykey' });
     }
-    public static ofString(option: Intl.CollatorOptions = { sensitivity: 'base' }, locales?: string[] | undefined) {
-        return new BTree<string, string>(BTree.stringComparer(option, locales));
+
+    public static ofString(
+        option: Intl.CollatorOptions & IConstructorOptions = { sensitivity: 'base', dedupe: 'bykey' },
+        locales?: string[] | undefined
+    ) {
+        return new SortedList<string, string>(SortedList.stringComparer(option, locales));
     }
+    //#endregion
 
     //#region Comparers
     private static stringComparer(
@@ -71,12 +186,12 @@ export class BTree<K, V> {
     //#endregion
 
     //#region Iterate
-    private static find = function*<K, V>(tree: BTree<K, V>, item: K) {
+    private static find = function*<K, V>(tree: SortedList<K, V>, item: K) {
         const comparer = tree.comparer;
         let curr = tree.root,
             value = 0;
         while (curr) {
-            value = comparer(tree.keyAccessor!(curr.getOne()), item);
+            value = comparer(curr.key, item);
             if (value < 0) {
                 curr = curr.right;
             } else if (value > 0) {
@@ -90,18 +205,24 @@ export class BTree<K, V> {
         }
     };
 
-    private static iterateItems = function*<V>(root?: BTNode<V>) {
-        for (let node of BTree.iterateNodes(root)) {
+    private static iterateArray = function*<V>(items: V[], desc?: boolean) {
+        for (let i = 0, idx = 0, len = items.length; i < len; i++) {
+            idx = desc ? len - 1 - i : i;
+            yield items[idx];
+        }
+    };
+    private static iterateItems = function*<K, V>(root?: BTNode<K, V>) {
+        for (let node of SortedList.iterateNodes(root)) {
             for (let item of node.getItems()) {
                 yield item;
             }
         }
     };
-    private static iterateNodes = function*<V>(root?: BTNode<V>) {
+    private static iterateNodes = function*<K, V>(root?: BTNode<K, V>) {
         let nextDir = Direction.right,
             curr = root!,
-            right: BTNode<V> | undefined = curr,
-            prev: BTNode<V>;
+            right: BTNode<K, V> | undefined = curr,
+            prev: BTNode<K, V>;
         while (curr) {
             if (nextDir === Direction.right) {
                 curr = right!;
@@ -128,69 +249,96 @@ export class BTree<K, V> {
             }
         }
     };
-    public getItems() {
-        return BTree.iterateItems(this.root);
-    }
-
-    public getNodes() {
-        return BTree.iterateNodes(this.root);
+    private static iterateItemsDesc = function*<K, V>(root?: BTNode<K, V>) {
+        for (let node of SortedList.iterateNodesDesc(root)) {
+            for (let item of node.getItems()) {
+                yield item;
+            }
+        }
+    };
+    private static iterateNodesDesc = function*<K, V>(root?: BTNode<K, V>) {
+        let nextDir = Direction.left,
+            curr = root!,
+            left: BTNode<K, V> | undefined = curr,
+            prev: BTNode<K, V>;
+        while (curr) {
+            if (nextDir === Direction.left) {
+                curr = left!;
+                while (curr.right) {
+                    curr = curr.right;
+                }
+                left = curr.left;
+                nextDir = left ? Direction.left : Direction.up;
+                yield curr!;
+            } else if (nextDir === Direction.up) {
+                nextDir = Direction.none;
+                while (curr.parent) {
+                    prev = curr;
+                    curr = curr.parent!;
+                    if (curr.right === prev) {
+                        left = curr.left;
+                        nextDir = left ? Direction.left : Direction.up;
+                        yield curr!;
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+    };
+    private getNodes(desc?: boolean) {
+        return desc ? SortedList.iterateNodesDesc(this.root) : SortedList.iterateNodes(this.root);
     }
     //#endregion
 
     //#region Add
-    public add(...items: V[]) {
-        for (let item of items) {
-            let newNode = new BTNode<V>(item);
-            if (!this.root) {
-                this.root = newNode;
-                this.size = 1;
-            } else {
-                this.addItem(newNode);
-            }
-        }
-    }
-
-    private addItem(newNode: BTNode<V>) {
+    private addItem(key: K, item: V) {
         let comparer = this.comparer,
-            curr: BTNode<V> | undefined = this.root!,
+            curr: BTNode<K, V> | undefined = this.root!,
             value = 0,
-            rebalanceDir = 0;
+            rebalanceDir = 0,
+            added = false;
 
         while (curr) {
-            value = comparer(this.keyAccessor!(curr.getOne()), this.keyAccessor!(newNode.getOne()));
+            value = comparer(curr.key, key);
             if (value > 0) {
                 if (curr.left) {
                     curr = curr.left;
                 } else {
-                    curr.setLeft(newNode);
+                    curr.setLeft(new BTNode(item, key, new this.nodeStorageType(item)));
                     rebalanceDir = 1;
                 }
             } else if (value < 0) {
                 if (curr.right) {
                     curr = curr.right;
                 } else {
-                    curr.setRight(newNode);
+                    curr.setRight(new BTNode(item, key, new this.nodeStorageType(item)));
                     rebalanceDir = -1;
                 }
             } else {
-                if (curr.addItem(newNode.getOne())) {
+                if (curr.addItem(item)) {
                     this.size += 1;
+                    added = true;
                 }
                 break;
             }
 
             if (rebalanceDir) {
+                added = true;
                 this.size += 1;
                 this.balanceInsertion(curr, rebalanceDir);
                 break;
             }
         }
+
+        return added;
     }
 
-    private balanceInsertion(node: BTNode<V>, direction: number) {
+    private balanceInsertion(node: BTNode<K, V>, direction: number) {
         let balance = direction,
-            parent: undefined | BTNode<V>,
-            curr: undefined | BTNode<V> = node;
+            parent: undefined | BTNode<K, V>,
+            curr: undefined | BTNode<K, V> = node;
 
         while (curr) {
             balance = curr.balance += balance;
@@ -222,20 +370,15 @@ export class BTree<K, V> {
     //#endregion
 
     //#region Remove
-    public remove(...items: V[]) {
-        for (let item of items) {
-            this.removeItem(item);
-        }
-    }
-
     private removeItem(item: V) {
         let node = this.root,
             comparer = this.comparer,
             value: number,
-            result = false;
+            result = false,
+            itemKey = this.keyAccessor!(item);
 
         while (node) {
-            value = comparer(this.keyAccessor!(node.getOne()), this.keyAccessor!(item));
+            value = comparer(node.key, itemKey);
             if (value < 0) {
                 node = node.right;
             } else if (value > 0) {
@@ -336,10 +479,10 @@ export class BTree<K, V> {
         return result;
     }
 
-    private balanceDeletion(node: BTNode<V>, direction: number) {
-        let curr: undefined | BTNode<V> = node,
+    private balanceDeletion(node: BTNode<K, V>, direction: number) {
+        let curr: undefined | BTNode<K, V> = node,
             balance = direction,
-            parent: undefined | BTNode<V>;
+            parent: undefined | BTNode<K, V>;
         while (curr) {
             balance = curr.balance += balance;
 
@@ -375,7 +518,7 @@ export class BTree<K, V> {
     //#endregion
 
     //#region Rotate
-    private rotateLeft(node: BTNode<V>) {
+    private rotateLeft(node: BTNode<K, V>) {
         const right = node.right!,
             rightsLeft = right.left,
             parent = node.parent;
@@ -392,7 +535,7 @@ export class BTree<K, V> {
 
         return right;
     }
-    private rotateRight(node: BTNode<V>) {
+    private rotateRight(node: BTNode<K, V>) {
         const left = node.left!,
             leftsRight = left.right,
             parent = node.parent;
@@ -409,7 +552,7 @@ export class BTree<K, V> {
 
         return left;
     }
-    private rotateLeftRight(node: BTNode<V>) {
+    private rotateLeftRight(node: BTNode<K, V>) {
         const left = node.left!,
             leftsRight = left.right!,
             parent = node.parent,
@@ -441,7 +584,7 @@ export class BTree<K, V> {
 
         return leftsRight;
     }
-    private rotateRightLeft(node: BTNode<V>) {
+    private rotateRightLeft(node: BTNode<K, V>) {
         let right = node.right!,
             rightsLeft = right.left!,
             parent = node.parent,
@@ -476,12 +619,12 @@ export class BTree<K, V> {
     //#endregion
 }
 
-export const stringifyBtree = <K, V>(tree: BTree<K, V>) => {
-    const printNode = (node?: BTNode<V>): string => {
+export const describeSortedList = <K, V>(tree: SortedList<K, V>) => {
+    const printNode = (node?: BTNode<K, V>): string => {
         if (!node) {
             return '-';
         } else {
-            let item = node.getOne(),
+            let item = node.key,
                 children = node.left || node.right ? `(${printNode(node.left)},${printNode(node.right)})` : '',
                 toString = typeof item === 'object' ? JSON.stringify(item) : item;
             return `${toString}${children}`;
@@ -496,23 +639,18 @@ enum RemovalResult {
     Removed = 2
 }
 
-class BTNode<V> {
-    public left?: BTNode<V>;
-    public right?: BTNode<V>;
+class BTNode<K, V> {
+    public left?: BTNode<K, V>;
+    public right?: BTNode<K, V>;
     public balance = 0;
-    public parent?: BTNode<V>;
+    public parent?: BTNode<K, V>;
+    public readonly key: K;
 
-    private items: Set<V> = new Set<V>();
-    private anItem: V;
-    private static iterator = function*<V>(items: Set<V>) {
-        for (let item of items.values()) {
-            yield item;
-        }
-    };
+    private items: INodeStorage<V>;
 
-    constructor(item: V) {
-        this.anItem = item;
-        this.items.add(item);
+    constructor(item: V, key: K, itemStorage: INodeStorage<V>) {
+        this.key = key;
+        this.items = itemStorage;
     }
 
     public addItem(item: V) {
@@ -524,13 +662,10 @@ class BTNode<V> {
     }
     public removeItem(item: V) {
         let isEmpty = false,
-            removed = this.items.delete(item);
+            removed = this.items.remove(item);
 
-        if (item === this.anItem) {
-            let newFirst = this.findAnyItem();
-            if (newFirst) {
-                this.anItem = newFirst;
-            } else {
+        if (removed) {
+            if (this.items.size() === 0) {
                 isEmpty = true;
             }
         }
@@ -541,20 +676,17 @@ class BTNode<V> {
         return this.items.has(item);
     }
     public getItems() {
-        return BTNode.iterator<V>(this.items);
+        return this.items.getItems();
     }
-    public getOne() {
-        return this.anItem;
-    }
-    public setLeft(left?: BTNode<V>) {
+    public setLeft(left?: BTNode<K, V>) {
         this.left = left;
         this.setChild(left);
     }
-    public setRight(right?: BTNode<V>) {
+    public setRight(right?: BTNode<K, V>) {
         this.right = right;
         this.setChild(right);
     }
-    public setAsChild(parent: BTNode<V> | undefined, previousChild: BTNode<V>) {
+    public setAsChild(parent: BTNode<K, V> | undefined, previousChild: BTNode<K, V>) {
         if (parent) {
             if (parent.right === previousChild) {
                 parent.right = this;
@@ -564,14 +696,108 @@ class BTNode<V> {
         }
         this.parent = parent;
     }
-    private setChild(child?: BTNode<V>) {
+    private setChild(child?: BTNode<K, V>) {
         if (child) {
             child.parent = this;
         }
     }
-    private findAnyItem() {
-        for (let item of this.getItems()) {
-            return item;
-        }
+}
+
+export class NodeSetStorage<T> implements INodeStorage<T> {
+    private set = new Set<T>();
+    constructor(item: T) {
+        this.set.add(item);
     }
+    has(item: T) {
+        return this.set.has(item);
+    }
+    getItems() {
+        return this.set.values();
+    }
+    add(item: T) {
+        if (!this.set.has(item)) {
+            this.set.add(item);
+            return true;
+        }
+        return false;
+    }
+    remove(item: T) {
+        return this.set.delete(item);
+    }
+    size() {
+        return this.set.size;
+    }
+}
+
+export class NodeSingleItemStorage<T> implements INodeStorage<T> {
+    private item: T | undefined;
+    constructor(item: T) {
+        this.item = item;
+    }
+    has(item: T) {
+        return this.item === item;
+    }
+    private static iterator = function*<T>(item?: T) {
+        if (item) {
+            yield item;
+        }
+    };
+    getItems() {
+        return NodeSingleItemStorage.iterator<T>(this.item);
+    }
+    add(item: T) {
+        this.item = item;
+        return false;
+    }
+    size() {
+        return this.item ? 1 : 0;
+    }
+    remove(item: T) {
+        if (item === this.item) {
+            this.item = undefined;
+            return true;
+        }
+        return false;
+    }
+}
+
+export class NodeArrayStorage<T> implements INodeStorage<T> {
+    private items: T[] = [];
+    private static iterator = function*<T>(items: T[]) {
+        for (let item of items) {
+            yield item;
+        }
+    };
+    constructor(item: T) {
+        this.items.push(item);
+    }
+    has(item: T) {
+        return this.items.indexOf(item) >= 0;
+    }
+    getItems() {
+        return NodeArrayStorage.iterator(this.items);
+    }
+    add(item: T) {
+        this.items.push(item);
+        return true;
+    }
+    size() {
+        return this.items.length;
+    }
+    remove(item: T) {
+        let pos = this.items.indexOf(item);
+        if (pos >= 0) {
+            this.items.splice(pos, 1);
+            return this.items.length > 0;
+        }
+        return false;
+    }
+}
+
+interface INodeStorage<T> {
+    has: (item: T) => boolean;
+    getItems: () => IterableIterator<T>;
+    add: (item: T) => boolean;
+    remove: (item: T) => boolean;
+    size: () => number;
 }
