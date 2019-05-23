@@ -231,3 +231,30 @@ test('is correctly doubly linked', () => {
     tree.add(5.1);
     validate(7);
 });
+
+test('can get range greater than', () => {
+    const tree = SortedList.ofNumber();
+    tree.add(10, 5, 3, 7, 1, 4, 2, 6, 8, 9);
+
+    expect([...tree.getRange({ gt: 7 })].join('')).toEqual('8910');
+    expect([...tree.getRange({ gte: 6 })].join('')).toEqual('678910');
+});
+
+test('can get range less than', () => {
+    const tree = SortedList.ofNumber();
+    tree.add(10, 5, 3, 7, 1, 4, 2, 6, 8, 9);
+
+    expect([...tree.getRange({ lt: 4 })].join('')).toEqual('123');
+    expect([...tree.getRange({ lte: 4 })].join('')).toEqual('1234');
+});
+
+test('can get range less than and greater than', () => {
+    const tree = SortedList.ofNumber();
+    tree.add(10, 5, 3, 7, 1, 4, 2, 6, 8, 9);
+
+    expect([...tree.getRange({ lt: 5, gt: 1 })].join('')).toEqual('234');
+    expect([...tree.getRange({ lte: 5, gte: 2 })].join('')).toEqual('2345');
+    expect([...tree.getRange({ lte: 9, gt: 5 })].join('')).toEqual('6789');
+    expect([...tree.getRange({ lt: 9, gte: 5 })].join('')).toEqual('5678');
+    expect([...tree.getRange({ lt: 4, gt: 5 })].join('')).toEqual('');
+});

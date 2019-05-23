@@ -12,7 +12,6 @@ enum Direction {
 
 interface IConstructorOptions {
     dedupe: 'byref' | 'bykey' | 'disabled';
-    disableIterableCache?: boolean;
 }
 
 export class SortedList<K, V> {
@@ -22,8 +21,6 @@ export class SortedList<K, V> {
     private size = 0;
     private keyAccessor: (item: V) => K;
     private nodeStorageType: new (item: V) => INodeStorage<V>;
-    private iteratorCache?: V[] = undefined;
-    private cacheDisabled = false;
 
     constructor(
         private comparer: (pivot: K, other: K) => number | SortRelationship,
@@ -40,8 +37,6 @@ export class SortedList<K, V> {
             : options.dedupe === 'byref'
             ? NodeSetStorage
             : NodeArrayStorage;
-
-        this.cacheDisabled = options ? !!options.disableIterableCache : false;
     }
 
     /**
@@ -77,7 +72,8 @@ export class SortedList<K, V> {
      * @param key
      */
     public find(key: K) {
-        return SortedList.find<K, V>(this, key);
+        const node = this.findNode(key);
+        return node ? node.getItems() : SortedList.empty<V>();
     }
 
     /**
@@ -88,6 +84,23 @@ export class SortedList<K, V> {
         for (let item of this.find(key)) {
             return item;
         }
+    }
+
+    public getRange(rng: Partial<{ gt: K; gte: K; lt: K; lte: K }>) {
+        const lowerBound = rng.gt !== undefined ? rng.gt : rng.gte,
+            startNode = this.findLowest(lowerBound, lowerBound === rng.gte),
+            upperBound = rng.lt !== undefined ? rng.lt : rng.lte,
+            upperEq = rng.lte === upperBound ? 0 : undefined,
+            ascendCheck =
+                upperBound === undefined
+                    ? () => true
+                    : (key: K) => {
+                          const value = this.comparer(key, upperBound);
+                          return value < 0 || value === upperEq;
+                      },
+            ascendingIterable = SortedList.nodesAscendingWhile(startNode, ascendCheck);
+
+        return SortedList.itemsIterable(ascendingIterable);
     }
 
     /**
@@ -110,10 +123,6 @@ export class SortedList<K, V> {
             }
         }
 
-        if (result) {
-            this.iteratorCache = undefined;
-        }
-
         return result;
     }
 
@@ -130,10 +139,6 @@ export class SortedList<K, V> {
             }
         }
 
-        if (result) {
-            this.iteratorCache = undefined;
-        }
-
         return result;
     }
 
@@ -142,7 +147,7 @@ export class SortedList<K, V> {
      * @param desc true to get items in reverse order
      */
     public getItems(desc?: boolean) {
-        return desc ? SortedList.desc(this.greatest) : SortedList.asc(this.least);
+        return desc ? SortedList.itemsDescending(this.greatest) : SortedList.itemsAscending(this.least);
     }
 
     /**
@@ -215,43 +220,88 @@ export class SortedList<K, V> {
     //#endregion
 
     //#region Iterate
-    private static asc = function*<K, V>(least?: BTNode<K, V>) {
+    private static nodesAscendingWhile = function*<K, V>(start: BTNode<K, V> | undefined, check: (item: K) => boolean) {
+        for (let node of SortedList.nodesAscending(start)) {
+            if (check(node.key)) {
+                yield node;
+            }
+        }
+    };
+    private static itemsAscending = function<K, V>(least?: BTNode<K, V>) {
+        return SortedList.itemsIterable(SortedList.nodesAscending(least));
+    };
+    private static nodesAscending = function*<K, V>(least?: BTNode<K, V>) {
         let curr = least;
         while (curr) {
-            for (let item of curr.getItems()) {
-                yield item;
-            }
+            yield curr;
             curr = curr.next;
         }
     };
-    private static desc = function*<K, V>(greatest?: BTNode<K, V>) {
+    private static itemsDescending = function<K, V>(greatest?: BTNode<K, V>) {
+        return SortedList.itemsIterable(SortedList.nodesDescending(greatest));
+    };
+    private static nodesDescending = function*<K, V>(greatest?: BTNode<K, V>) {
         let curr = greatest;
         while (curr) {
-            for (let item of curr.getItems()) {
-                yield item;
-            }
+            yield curr;
             curr = curr.prev;
         }
     };
+    private static itemsIterable = function*<K, V>(nodes: IterableIterator<BTNode<K, V>>) {
+        for (let node of nodes) {
+            for (let item of node.getItems()) {
+                yield item;
+            }
+        }
+    };
 
-    private static find = function*<K, V>(tree: SortedList<K, V>, item: K) {
-        const comparer = tree.comparer;
-        let curr = tree.root,
+    private static empty = function*<V>(): IterableIterator<V> {
+        if (false) yield undefined as any;
+    };
+    //#endregion
+
+    //#region Find
+    private findNode(item: K) {
+        let curr = this.root,
             value = 0;
         while (curr) {
-            value = comparer(curr.key, item);
+            value = this.comparer(curr.key, item);
             if (value < 0) {
                 curr = curr.right;
             } else if (value > 0) {
                 curr = curr.left;
             } else {
-                for (let item of curr.getItems()) {
-                    yield item;
-                }
-                break;
+                return curr;
             }
         }
-    };
+    }
+
+    private findLowest(greaterThan: K | undefined, orEqual: boolean) {
+        let curr = this.root,
+            value = 0,
+            result = this.least;
+
+        if (greaterThan !== undefined) {
+            while (curr) {
+                value = this.comparer(curr.key, greaterThan);
+                if (value === 0) {
+                    if (orEqual) {
+                        result = curr;
+                        break;
+                    } else {
+                        curr = curr.right;
+                    }
+                } else if (value > 0) {
+                    result = curr;
+                    curr = curr.left;
+                } else if (value < 0) {
+                    curr = curr.right;
+                }
+            }
+        }
+
+        return result;
+    }
     //#endregion
 
     //#region Add
