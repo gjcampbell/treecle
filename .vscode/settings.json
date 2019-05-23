@@ -25,6 +25,8 @@
         "**/*.tgz": true,
         "**/.yarn-integrity": true,
         "**/.env": true,
-        "**/.next": true
+        "**/.next": true,
+        "**/.cache": true,
+        "**/dist": true
     }
 }

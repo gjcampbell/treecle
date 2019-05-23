@@ -1,4 +1,5 @@
 import { SortedList, describeSortedList } from '../src/SortedList';
+import Tree from '../demo/Tree';
 
 test('stuff gets into the right structure', () => {
     const tree = SortedList.ofString();
@@ -195,18 +196,38 @@ test('can iterate in desc order', () => {
         prev = item;
     }
 });
-let randomStrings = (() => {
-    const result: string[] = [];
-    for (let i = 0; i < 10000; i++) {
-        result.push(Math.random().toString() + '_' + i);
-    }
-    return result;
-})();
 
-let randomNumbers = (() => {
-    const result: number[] = [];
-    for (let i = 0; i < 100000; i++) {
-        result.push(Math.random() + i);
-    }
-    return result;
-})();
+test('can remove the root', () => {
+    const tree = SortedList.ofNumber();
+    tree.add(5, 8, 2, 4, 1, 7, 6, 3, 9);
+    tree.remove(5);
+
+    expect(tree.getRoot()).toBeDefined();
+    expect(tree.getRoot()!.getItem()).not.toEqual(5);
+});
+
+test('is correctly doubly linked', () => {
+    const tree = SortedList.ofNumber(),
+        validate = (expectedCount: number) => {
+            let i = 1,
+                prev = tree.getHead(),
+                node = prev;
+            while ((node = node!.next)) {
+                expect(node.getItem()).toBeGreaterThan(prev!.getItem()!);
+                expect(prev!.getItem()).toBeLessThan(prev!.next!.getItem()!);
+                i++;
+
+                prev = node;
+            }
+            expect(i).toBe(expectedCount);
+        };
+
+    tree.add(5, 8, 2, 4, 1, 7, 6, 3, 9);
+    validate(9);
+
+    tree.remove(5, 1, 9);
+    validate(6);
+
+    tree.add(5.1);
+    validate(7);
+});

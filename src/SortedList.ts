@@ -17,6 +17,8 @@ interface IConstructorOptions {
 
 export class SortedList<K, V> {
     private root?: BTNode<K, V>;
+    private least?: BTNode<K, V>;
+    private greatest?: BTNode<K, V>;
     private size = 0;
     private keyAccessor: (item: V) => K;
     private nodeStorageType: new (item: V) => INodeStorage<V>;
@@ -57,6 +59,20 @@ export class SortedList<K, V> {
     }
 
     /**
+     * O(1), Get the node sorted to the beginning of the list
+     */
+    public getHead() {
+        return this.least;
+    }
+
+    /**
+     * O(1), Get the node sorted to the end of the list
+     */
+    public getTail() {
+        return this.greatest;
+    }
+
+    /**
      * O(log n), Find items by key
      * @param key
      */
@@ -84,7 +100,7 @@ export class SortedList<K, V> {
         for (let item of items) {
             let key = this.keyAccessor(item);
             if (!this.root) {
-                this.root = new BTNode<K, V>(item, key, new this.nodeStorageType(item));
+                this.least = this.greatest = this.root = new BTNode<K, V>(item, key, new this.nodeStorageType(item));
                 this.size = 1;
                 result = true;
             } else {
@@ -122,18 +138,31 @@ export class SortedList<K, V> {
     }
 
     /**
-     * O(n log n) 1st time, then cached O(n), if cache not disabled
-     * Get iterator for list
+     * O(1) to start, O(n) if fully iterated, Get iterator for list
      * @param desc true to get items in reverse order
      */
     public getItems(desc?: boolean) {
-        if (!this.cacheDisabled) {
-            if (!this.iteratorCache) {
-                this.iteratorCache = [...SortedList.iterateItems(this.root)];
+        return desc ? SortedList.desc(this.greatest) : SortedList.asc(this.least);
+    }
+
+    /**
+     * O(1), get item sorted to the beginning of the list
+     */
+    public getMin() {
+        if (this.least) {
+            for (let item of this.least.getItems()) {
+                return item;
             }
-            return SortedList.iterateArray<V>(this.iteratorCache, desc);
-        } else {
-            return desc ? SortedList.iterateItemsDesc(this.root) : SortedList.iterateItems(this.root);
+        }
+    }
+    /**
+     * O(1), get item sorted to the end of the list
+     */
+    public getMax() {
+        if (this.greatest) {
+            for (let item of this.greatest.getItems()) {
+                return item;
+            }
         }
     }
 
@@ -186,6 +215,25 @@ export class SortedList<K, V> {
     //#endregion
 
     //#region Iterate
+    private static asc = function*<K, V>(least?: BTNode<K, V>) {
+        let curr = least;
+        while (curr) {
+            for (let item of curr.getItems()) {
+                yield item;
+            }
+            curr = curr.next;
+        }
+    };
+    private static desc = function*<K, V>(greatest?: BTNode<K, V>) {
+        let curr = greatest;
+        while (curr) {
+            for (let item of curr.getItems()) {
+                yield item;
+            }
+            curr = curr.prev;
+        }
+    };
+
     private static find = function*<K, V>(tree: SortedList<K, V>, item: K) {
         const comparer = tree.comparer;
         let curr = tree.root,
@@ -204,92 +252,6 @@ export class SortedList<K, V> {
             }
         }
     };
-
-    private static iterateArray = function*<V>(items: V[], desc?: boolean) {
-        for (let i = 0, idx = 0, len = items.length; i < len; i++) {
-            idx = desc ? len - 1 - i : i;
-            yield items[idx];
-        }
-    };
-    private static iterateItems = function*<K, V>(root?: BTNode<K, V>) {
-        for (let node of SortedList.iterateNodes(root)) {
-            for (let item of node.getItems()) {
-                yield item;
-            }
-        }
-    };
-    private static iterateNodes = function*<K, V>(root?: BTNode<K, V>) {
-        let nextDir = Direction.right,
-            curr = root!,
-            right: BTNode<K, V> | undefined = curr,
-            prev: BTNode<K, V>;
-        while (curr) {
-            if (nextDir === Direction.right) {
-                curr = right!;
-                while (curr.left) {
-                    curr = curr.left;
-                }
-                right = curr.right;
-                nextDir = right ? Direction.right : Direction.up;
-                yield curr!;
-            } else if (nextDir === Direction.up) {
-                nextDir = Direction.none;
-                while (curr.parent) {
-                    prev = curr;
-                    curr = curr.parent!;
-                    if (curr.left === prev) {
-                        right = curr.right;
-                        nextDir = right ? Direction.right : Direction.up;
-                        yield curr!;
-                        break;
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-    };
-    private static iterateItemsDesc = function*<K, V>(root?: BTNode<K, V>) {
-        for (let node of SortedList.iterateNodesDesc(root)) {
-            for (let item of node.getItems()) {
-                yield item;
-            }
-        }
-    };
-    private static iterateNodesDesc = function*<K, V>(root?: BTNode<K, V>) {
-        let nextDir = Direction.left,
-            curr = root!,
-            left: BTNode<K, V> | undefined = curr,
-            prev: BTNode<K, V>;
-        while (curr) {
-            if (nextDir === Direction.left) {
-                curr = left!;
-                while (curr.right) {
-                    curr = curr.right;
-                }
-                left = curr.left;
-                nextDir = left ? Direction.left : Direction.up;
-                yield curr!;
-            } else if (nextDir === Direction.up) {
-                nextDir = Direction.none;
-                while (curr.parent) {
-                    prev = curr;
-                    curr = curr.parent!;
-                    if (curr.right === prev) {
-                        left = curr.left;
-                        nextDir = left ? Direction.left : Direction.up;
-                        yield curr!;
-                        break;
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-    };
-    private getNodes(desc?: boolean) {
-        return desc ? SortedList.iterateNodesDesc(this.root) : SortedList.iterateNodes(this.root);
-    }
     //#endregion
 
     //#region Add
@@ -298,22 +260,37 @@ export class SortedList<K, V> {
             curr: BTNode<K, V> | undefined = this.root!,
             value = 0,
             rebalanceDir = 0,
-            added = false;
+            added = false,
+            newItem: BTNode<K, V>,
+            isLeast = true,
+            isGreatest = true;
 
         while (curr) {
             value = comparer(curr.key, key);
             if (value > 0) {
+                isGreatest = false;
                 if (curr.left) {
                     curr = curr.left;
                 } else {
-                    curr.setLeft(new BTNode(item, key, new this.nodeStorageType(item)));
+                    newItem = new BTNode(item, key, new this.nodeStorageType(item));
+                    if (isLeast) {
+                        this.least = newItem;
+                    }
+                    curr.setPrev(newItem);
+                    curr.setLeft(newItem);
                     rebalanceDir = 1;
                 }
             } else if (value < 0) {
+                isLeast = false;
                 if (curr.right) {
                     curr = curr.right;
                 } else {
-                    curr.setRight(new BTNode(item, key, new this.nodeStorageType(item)));
+                    newItem = new BTNode(item, key, new this.nodeStorageType(item));
+                    if (isGreatest) {
+                        this.greatest = newItem;
+                    }
+                    curr.setNext(newItem);
+                    curr.setRight(newItem);
                     rebalanceDir = -1;
                 }
             } else {
@@ -389,6 +366,19 @@ export class SortedList<K, V> {
                     removalResult = node.removeItem(item);
 
                 if (removalResult === RemovalResult.Empty) {
+                    if (node === this.least) {
+                        this.least = node.next;
+                    }
+                    if (node === this.greatest) {
+                        this.greatest = node.prev;
+                    }
+                    if (node.next) {
+                        node.next.prev = node.prev;
+                    }
+                    if (node.prev) {
+                        node.prev.next = node.next;
+                    }
+
                     result = true;
                     if (!left) {
                         if (!right) {
@@ -441,7 +431,7 @@ export class SortedList<K, V> {
                             const succParent = successor.parent!,
                                 succRight = successor.right;
 
-                            if (succParent.left === succParent) {
+                            if (succParent.left === successor) {
                                 succParent.left = succRight;
                             } else {
                                 succParent.right = succRight;
@@ -640,6 +630,8 @@ enum RemovalResult {
 }
 
 class BTNode<K, V> {
+    public prev?: BTNode<K, V>;
+    public next?: BTNode<K, V>;
     public left?: BTNode<K, V>;
     public right?: BTNode<K, V>;
     public balance = 0;
@@ -678,6 +670,11 @@ class BTNode<K, V> {
     public getItems() {
         return this.items.getItems();
     }
+    public getItem() {
+        for (let item of this.getItems()) {
+            return item;
+        }
+    }
     public setLeft(left?: BTNode<K, V>) {
         this.left = left;
         this.setChild(left);
@@ -700,6 +697,26 @@ class BTNode<K, V> {
         if (child) {
             child.parent = this;
         }
+    }
+    public setPrev(prev?: BTNode<K, V>) {
+        if (this.prev) {
+            this.prev.next = prev;
+        }
+        if (prev) {
+            prev.prev = this.prev;
+            prev.next = this;
+        }
+        this.prev = prev;
+    }
+    public setNext(next?: BTNode<K, V>) {
+        if (this.next) {
+            this.next.prev = next;
+        }
+        if (next) {
+            next.next = this.next;
+            next.prev = this;
+        }
+        this.next = next;
     }
 }
 
